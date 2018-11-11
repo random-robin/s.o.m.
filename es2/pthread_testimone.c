@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #define K 2
+#define DOWNLOADS_MAX 3
 
 typedef struct {
 	char film[K][40];
@@ -23,6 +24,15 @@ sem_t mutex;
 sem_t barrier;
 int completati = 0;
 int n_persone;
+
+//Per realizzare il concetto di priorita utilizzo il concetto di semaforo privato
+
+//Un semaforo per ogni coda, quindi 11
+
+sem_t download_sem[11]; //Vanno inizializzati a 0
+int counter[11]; //Contatore dei processi in coda va inizializzato a 0 anche lui
+sem_t download_mutex; //Va inizializzato a 1 come ogni mutex
+int disponibili = DOWNLOADS_MAX; //Massimo numero di download contemporanei
 
 
 void init_sondaggio(){
@@ -57,8 +67,46 @@ void stampa_max_film() {
 	printf("%s\t Voti: %d\n", max_film, max);
 }
 
+//Implementazione del gestore con i metodi richiedi e rilascia
+
+void richiedi_download(int media, int id) {
+	printf("%d: richiedo il download\n", id);
+	sem_wait(&download_mutex);
+	if (!(disponibili > 0)) {
+		counter[media]++;
+		printf("Sono %d e mi accodo in %d\n", id, media);
+		sem_post(&download_mutex);
+		sem_wait(&(download_sem[media]));
+		counter[media]--;
+		printf("Ho media %d e sono stato risvegliato\n", media);	
+	}
+	disponibili--;
+	printf("Risorsa allocata al thread %d\n", id);
+	sem_post(&download_mutex);
+}
+
+void rilascia_download(int id) {
+	sem_wait(&download_mutex);
+	int priority = -1;
+	disponibili++;
+	printf("%d: Rilascio della risorsa\n", id);
+	for (int i = 11; i >= 0 && priority == -1; i--) {
+		if (counter[i] > 0) {
+			priority = i;
+		}
+	}
+	if (priority != -1) {
+		printf("Trovato thread in attesa con media %d\n", priority);
+		sem_post(&(download_sem[priority]));
+	} else {
+		printf("%d: Non ho trovato nessuno rilascio il mutex\n", id);
+		sem_post(&download_mutex);
+	}
+}
+
 void *inizia_sondaggio(void *param) {
-	int i, voto, id;
+	int i, voto, id, media;
+	media = 0;
 	for (i = 0; i < K; i++) {
 		//Creazione del numero random [1..10]
 		voto = (rand() %10) + 1;
@@ -68,8 +116,10 @@ void *inizia_sondaggio(void *param) {
 		sondaggio.voti[i] += voto;
 		sondaggio.pareri = sondaggio.pareri + 1;
 		pthread_mutex_unlock(&(sondaggio.m));
+		media += voto;
 		stampa_media();
 	}
+
 	//Implementazione della sincronizzazione a barriera
 	sem_wait(&mutex);
 	completati++;
@@ -80,11 +130,15 @@ void *inizia_sondaggio(void *param) {
 	}
 	sem_post(&mutex);
 	//Meccanismo a tornello
-	printf("Sono il numero %d e sto aspettando...\n", id);
 	sem_wait(&barrier);
-	printf("Sono %d e ho passato la barriera e risveglio %d\n", id, id - 1);
-	sleep(2);
 	sem_post(&barrier);
+	media = media / K;
+	//Implementezione della richiesta al download
+	richiedi_download(media, id);
+	printf("%d: Sto scaricando\n", id);
+	sleep(3);
+	printf("%d: Ho finito\n", id);
+	rilascia_download(id);
 	stampa_max_film();
 
 }
@@ -96,7 +150,13 @@ int main(int argc, char **argv) {
 	
 	sem_init(&mutex, 0, 1);
 	sem_init(&barrier, 0, 0);
-
+	
+	//Inizializzazione semafori privati e contatori e mutex
+	sem_init(&download_mutex, 0, 1);
+	for (int k = 0; k < 12; k++) {
+		sem_init(&(download_sem[k]), 0, 0);
+		counter[k] = 0;
+	}
 
 	printf("Quante persone vuoi che ci siano\n");
 	scanf("%d%*c", &n_persone);
